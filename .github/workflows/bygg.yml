@@ -1,0 +1,61 @@
+name: Bygg
+
+# Den 2:a varje månad, och för hand under Actions. Hinner ett bygge inte
+# klart (det första tar flera timmar) startar det nästa själv och
+# fortsätter där det slutade.
+on:
+  schedule:
+    - cron: '0 3 2 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: bygg
+  cancel-in-progress: false
+
+jobs:
+  bygg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tester
+        run: node test.mjs
+
+      - name: Hämta förra filen
+        run: gh release download senaste --dir forra --pattern arsredovisningar.zip --pattern behandlade.txt || echo "Ingen tidigare fil, bygger från början"
+
+      - name: Bygg
+        run: node bygg.mjs --forra forra --ut ut --minuter 300
+
+      - name: Publicera
+        run: |
+          gh release view senaste >/dev/null 2>&1 || gh release create senaste --title "Senaste" --notes "Byggs"
+          gh release upload senaste ut/arsredovisningar.zip ut/behandlade.txt --clobber
+          gh release edit senaste --notes-file ut/notering.md
+
+      # Ett publikt repo utan commits på 60 dagar får sina schemalagda
+      # jobb avstängda. Därför committas noteringen varje gång.
+      - name: Notera bygget
+        run: |
+          cp ut/notering.md senast.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add senast.md
+          git commit -m "Bygge $(date -u +%Y-%m-%d)" || echo "Ingen ändring"
+          git push
+
+      - name: Fortsätt om bygget inte hann klart
+        if: hashFiles('ut/status.txt') != ''
+        run: |
+          if grep -q ofullstandig ut/status.txt; then gh workflow run bygg.yml --ref main; fi
