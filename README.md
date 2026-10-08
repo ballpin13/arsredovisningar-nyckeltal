@@ -37,7 +37,8 @@ fälten, rubrikrad först.
 | utdelning | Föreslagen utdelning, kronor |
 | esef | Tomt, eller `koncern`/`bolag` för ett börsbolag (se nedan) |
 
-Ett tomt fält betyder att värdet inte står märkt i årsredovisningen.
+Ett tomt fält betyder att värdet inte står märkt i årsredovisningen. Har
+årsredovisningen också koncernredovisningen tas bolagets egna värden.
 
 Börsbolag lämnar ett intyg utan belopp och årsredovisningen i EU:s format
 ESEF, enligt IFRS. Då tas siffrorna ur ESEF-rapporten, och `esef` säger

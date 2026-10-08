@@ -62,6 +62,18 @@ test('lasArsredovisning: det mest exakta värdet går före tusental', () => {
   ]));
   assert.equal(r.arets_resultat, '-990');
 });
+test('lasArsredovisning: med koncernredovisning tas bolagets egna värden, inte koncernens', () => {
+  const seg = (namn) => '<xbrli:segment><se-gen-base:RedovisningInformation' + namn + 'Segment /></xbrli:segment>';
+  const html = rapport([
+    ktx('jur0', '2025-01-01', '2025-12-31', seg('JuridiskPerson')), ktx('kon0', '2025-01-01', '2025-12-31', seg('Koncern')),
+    ktx('gen0', null, '2025-12-31', seg('Generell')),
+    tal('Nettoomsattning', 'kon0', '900'), tal('Nettoomsattning', 'jur0', '400'), tal('Aktiekapital', 'gen0', '50 000'),
+  ]);
+  const r = lasArsredovisning(html);
+  assert.equal(r.nettoomsattning, '400');
+  assert.equal(r.aktiekapital, '50000');
+  assert.equal(lasArsredovisning(rapport([ktx('kon0', '2025-01-01', '2025-12-31', seg('Koncern')), tal('Nettoomsattning', 'kon0', '900')])).nettoomsattning, '');
+});
 test('lasArsredovisning: soliditet som procent', () => {
   const r = lasArsredovisning(rapport([tal('Soliditet', 'balans0', '29,8').replace('scale="0"', 'scale="-2"')]));
   assert.equal(r.soliditet, '29.8');
@@ -116,6 +128,10 @@ test('lasEsef: totalen går före en del, i båda ordningarna', () => {
   assert.equal(r.nettoomsattning, '9000000');
   assert.equal(lasEsef(esef([ifrs('Revenue', 'period0', '9'), ifrs('RevenueFromSaleOfGoods', 'period0', '7')]), GRUND).nettoomsattning, '9000000');
   assert.equal(lasEsef(esef([ifrs('RevenueFromSaleOfGoods', 'period0', '7')]), GRUND).nettoomsattning, '7000000');
+});
+test('lasEsef: hyresintäkter är omsättning för ett fastighetsbolag, men sist', () => {
+  assert.equal(lasEsef(esef([ifrs('RentalIncomeFromInvestmentProperty', 'period0', '4 354')]), GRUND).nettoomsattning, '4354000000');
+  assert.equal(lasEsef(esef([ifrs('RentalIncomeFromInvestmentProperty', 'period0', '1'), ifrs('Revenue', 'period0', '2')]), GRUND).nettoomsattning, '2000000');
 });
 test('lasEsef: varor och tjänster utan summa ger ingen omsättning', () => {
   const r = lasEsef(esef([ifrs('RevenueFromSaleOfGoods', 'period0', '7'), ifrs('RevenueFromRenderingOfServices', 'period0', '2'), ifrs('ProfitLoss', 'period0', '1')]), GRUND);

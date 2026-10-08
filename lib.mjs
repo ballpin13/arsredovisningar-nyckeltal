@@ -112,12 +112,14 @@ export function zipEnFil(namn, data, datum = new Date()) {
 // dag (balans). `ifrs` är elementen i IFRS-taxonomin som börsbolagen
 // använder (ESEF), det första som finns går före. En koncern utan minoritet
 // taggar ibland bara moderbolagets ägares andel av eget kapital och
-// resultat, som då är hela beloppet. Soliditeten och antalet
+// resultat, som då är hela beloppet. Ett fastighetsbolag har hyresintäkter
+// som omsättning. Soliditeten och antalet
 // anställda har inget IFRS-element: soliditeten räknas ut, antalet
 // anställda saknas.
 export const KOLUMNER = [
   { namn: 'nettoomsattning', tag: 'Nettoomsattning', typ: 'period',
-    ifrs: ['Revenue', 'RevenueFromContractsWithCustomers', ['RevenueFromSaleOfGoods', 'RevenueFromRenderingOfServices']] },
+    ifrs: ['Revenue', 'RevenueFromContractsWithCustomers', ['RevenueFromSaleOfGoods', 'RevenueFromRenderingOfServices'],
+      'RentalIncomeFromInvestmentProperty'] },
   { namn: 'rorelseresultat', tag: 'Rorelseresultat', typ: 'period', ifrs: ['ProfitLossFromOperatingActivities'] },
   { namn: 'resultat_efter_fin', tag: 'ResultatEfterFinansiellaPoster', typ: 'period', ifrs: ['ProfitLossBeforeTax'] },
   { namn: 'arets_resultat', tag: 'AretsResultat', typ: 'period', ifrs: ['ProfitLoss', 'ProfitLossAttributableToOwnersOfParent'] },
@@ -166,6 +168,17 @@ export function tolkaTal(text, format, scale, sign) {
   return sign === '-' ? -v : v;
 }
 
+// En årsredovisning som också har koncernredovisningen märker varje värde
+// med ett segment: juridisk person (bolaget självt), koncern eller
+// generellt. Juridisk person och generellt är bolagets egna värden och
+// räknas som utan dimension; koncernens och alla andra uppdelningar tas
+// inte.
+function harDimension(k) {
+  const delar = [...k.matchAll(/<xbrli:(segment|scenario)\b[^>]*>([\s\S]*?)<\/xbrli:\1>/gi)].map((m) => m[2]).join('')
+    .replace(/<[\w-]+:RedovisningInformation(JuridiskPerson|Generell)Segment\s*\/>/g, '');
+  return /<xbrli:(segment|scenario)\b/i.test(k) && /<[a-z]/i.test(delar);
+}
+
 // Kontexterna: id → { start, slut, dim }. `slut` är endDate eller instant.
 function kontexter(html) {
   const ut = new Map();
@@ -177,7 +190,7 @@ function kontexter(html) {
     ut.set(id, {
       start: dag('startDate'),
       slut: dag('endDate') || dag('instant'),
-      dim: /<xbrli:(segment|scenario)\b/i.test(k),
+      dim: harDimension(k),
     });
   }
   return ut;
