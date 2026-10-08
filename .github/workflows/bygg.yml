@@ -35,8 +35,10 @@ jobs:
       - name: Hämta förra filen
         run: gh release download senaste --dir forra --pattern arsredovisningar.zip --pattern behandlade.txt || echo "Ingen tidigare fil, bygger från början"
 
+      # omlas.txt: veckofiler att läsa om efter en ändring i inläsningen.
+      # De som läses stryks ur listan, och filen tas bort när den är tom.
       - name: Bygg
-        run: node bygg.mjs --forra forra --ut ut --minuter 300
+        run: node bygg.mjs --forra forra --ut ut --minuter 300 $( [ -f omlas.txt ] && echo --omlas omlas.txt )
 
       - name: Publicera
         run: |
@@ -52,6 +54,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add senast.md
+          if [ -f ut/omlas.txt ]; then
+            if [ -s ut/omlas.txt ]; then cp ut/omlas.txt omlas.txt && git add omlas.txt; else git rm -q omlas.txt; fi
+          fi
           git commit -m "Bygge $(date -u +%Y-%m-%d)" || echo "Ingen ändring"
           git push
 

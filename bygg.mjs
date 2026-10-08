@@ -16,7 +16,8 @@
 // --max    högst så många veckofiler (för prov).
 // --lokal  läs en nedladdad veckofil i stället för att hämta (för prov).
 // --omlas  fil med veckofiler (en per rad) att läsa om fast de redan är
-//          behandlade, till exempel efter en ändring i inläsningen.
+//          behandlade, till exempel efter en ändring i inläsningen. De som
+//          inte hinns med skrivs till omlas.txt i --ut.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,6 +41,7 @@ const lokala = allaArg('lokal');
 const omlas = new Set(arg('omlas', null)
   ? readFileSync(arg('omlas'), 'utf8').split('\n').map((r) => r.split('\t')[0].trim()).filter(Boolean) : []);
 
+// Svarar servern inte (503) väntas en halv, en och en och en halv minut.
 async function hamta(url, forsok = 4) {
   for (let i = 1; ; i++) {
     try {
@@ -48,7 +50,7 @@ async function hamta(url, forsok = 4) {
       return Buffer.from(await res.arrayBuffer());
     } catch (e) {
       if (i >= forsok) throw new Error(url + ': ' + e.message);
-      await new Promise((r) => setTimeout(r, 5000 * i));
+      await new Promise((r) => setTimeout(r, 30000 * i));
     }
   }
 }
@@ -131,7 +133,17 @@ if (lokala.length) {
   let nasta = gor.length ? hamta(BAS + '/' + gor[0].key) : null;
   for (let i = 0; i < gor.length; i++) {
     const v = gor[i];
-    const buf = await nasta;
+    let buf;
+    try {
+      buf = await nasta;
+    } catch (e) {
+      // Svarar inte servern sparas det som hunnits. Har inget alls lästs
+      // stannar bygget med fel, så att det inte startar om sig i en slinga.
+      console.log(e.message);
+      if (!lasta.size) throw e;
+      console.log('Resten tas vid nästa körning.');
+      break;
+    }
     // Nästa hämtas medan den här läses.
     nasta = i + 1 < gor.length && Date.now() < slutTid ? hamta(BAS + '/' + gor[i + 1].key) : null;
     const r = lasVeckofil(buf, bolag);
@@ -145,6 +157,10 @@ if (lokala.length) {
   }
   kvar = att.filter((v) => !lasta.has(v.key));
   klar = kvar.length === 0;
+  if (omlas.size) {
+    mkdirSync(utMapp, { recursive: true });
+    writeFileSync(join(utMapp, 'omlas.txt'), [...omlas].filter((k) => !lasta.has(k)).map((k) => k + '\n').join(''));
+  }
 }
 
 // ---- Utfilerna -------------------------------------------------------------
