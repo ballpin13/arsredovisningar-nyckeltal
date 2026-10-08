@@ -1,8 +1,3 @@
-arsredovisningar/2025/24_1.zip
-arsredovisningar/2025/24_2.zip
-arsredovisningar/2025/24_3.zip
-arsredovisningar/2025/25_1.zip
-arsredovisningar/2025/25_10.zip
 arsredovisningar/2025/25_2.zip
 arsredovisningar/2025/25_3.zip
 arsredovisningar/2025/25_4.zip
