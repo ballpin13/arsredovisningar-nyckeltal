@@ -15,10 +15,12 @@
 //          återstår tas vid nästa körning.
 // --max    högst så många veckofiler (för prov).
 // --lokal  läs en nedladdad veckofil i stället för att hämta (för prov).
+// --omlas  fil med veckofiler (en per rad) att läsa om fast de redan är
+//          behandlade, till exempel efter en ändring i inläsningen.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { zipPoster, zipEnFil, lasArsredovisning, arNyare, skrivFil, lasFil } from './lib.mjs';
+import { zipPoster, zipEnFil, lasInlamning, arNyare, skrivFil, lasFil } from './lib.mjs';
 
 const BAS = 'https://vardefulla-datamangder.bolagsverket.se/arsredovisningar-bulkfiler';
 const PREFIX = 'arsredovisningar/';
@@ -35,6 +37,8 @@ const franAr = Number(arg('fran-ar', '2025'));
 const slutTid = Date.now() + Number(arg('minuter', '330')) * 60e3;
 const max = Number(arg('max', 'Infinity'));
 const lokala = allaArg('lokal');
+const omlas = new Set(arg('omlas', null)
+  ? readFileSync(arg('omlas'), 'utf8').split('\n').map((r) => r.split('\t')[0].trim()).filter(Boolean) : []);
 
 async function hamta(url, forsok = 4) {
   for (let i = 1; ; i++) {
@@ -67,17 +71,15 @@ async function listaVeckofiler() {
 }
 
 // En veckofil: zip med en zip per årsredovisning, som i sin tur har
-// årsredovisningen som xhtml.
+// årsredovisningen som xhtml (eller intyget och ESEF-paketet, se
+// lasInlamning).
 function lasVeckofil(buf, bolag) {
   let antal = 0;
   let fel = 0;
   for (const inre of zipPoster(buf)) {
     try {
       const filer = inre.namn.toLowerCase().endsWith('.zip') ? zipPoster(inre.data()) : [inre];
-      for (const f of filer) {
-        if (!/\.x?html?$/i.test(f.namn)) continue;
-        const rad = lasArsredovisning(f.data().toString('utf8'), inre.namn);
-        if (!rad) continue;
+      for (const rad of lasInlamning(filer, inre.namn)) {
         antal++;
         if (arNyare(rad, bolag.get(rad.orgnr))) bolag.set(rad.orgnr, rad);
       }
@@ -121,10 +123,11 @@ if (lokala.length) {
     // Mappen är inlämningsåret. Nya filer hamnar alltid i innevarande år,
     // så gränsen stänger bara ute de äldsta åren.
     const ar = Number((v.key.match(/\/(\d{4})\//) || [])[1]);
-    return ar >= franAr && behandlade.get(v.key) !== v.etag;
+    return ar >= franAr && (behandlade.get(v.key) !== v.etag || omlas.has(v.key));
   });
   console.log('Veckofiler hos Bolagsverket: ' + alla.length + ', att läsa: ' + att.length);
   const gor = att.slice(0, max);
+  const lasta = new Set();
   let nasta = gor.length ? hamta(BAS + '/' + gor[0].key) : null;
   for (let i = 0; i < gor.length; i++) {
     const v = gor[i];
@@ -133,13 +136,14 @@ if (lokala.length) {
     nasta = i + 1 < gor.length && Date.now() < slutTid ? hamta(BAS + '/' + gor[i + 1].key) : null;
     const r = lasVeckofil(buf, bolag);
     behandlade.set(v.key, v.etag);
+    lasta.add(v.key);
     console.log(v.key + ': ' + r.antal + ' årsredovisningar, ' + r.fel + ' fel, ' + bolag.size + ' bolag');
     if (Date.now() >= slutTid && i + 1 < gor.length) {
       console.log('Tiden är slut. Resten tas vid nästa körning.');
       break;
     }
   }
-  kvar = att.filter((v) => behandlade.get(v.key) !== v.etag);
+  kvar = att.filter((v) => !lasta.has(v.key));
   klar = kvar.length === 0;
 }
 

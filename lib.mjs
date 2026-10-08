@@ -107,25 +107,37 @@ export function zipEnFil(namn, data, datum = new Date()) {
 // säger vilken period det gäller. Bara räkenskapsårets egna värden tas,
 // inte jämförelseårets, och inga värden med dimensioner (uppdelningar).
 
-// Kolumnerna i utfilen, i ordning. `tag` är elementet i taxonomin och
-// `typ` om värdet gäller hela året (period) eller årets sista dag (balans).
+// Kolumnerna i utfilen, i ordning. `tag` är elementet i den svenska
+// taxonomin och `typ` om värdet gäller hela året (period) eller årets sista
+// dag (balans). `ifrs` är elementen i IFRS-taxonomin som börsbolagen
+// använder (ESEF), det första som finns går före. En koncern utan minoritet
+// taggar ibland bara moderbolagets ägares andel av eget kapital och
+// resultat, som då är hela beloppet. Soliditeten och antalet
+// anställda har inget IFRS-element: soliditeten räknas ut, antalet
+// anställda saknas.
 export const KOLUMNER = [
-  { namn: 'nettoomsattning', tag: 'Nettoomsattning', typ: 'period' },
-  { namn: 'rorelseresultat', tag: 'Rorelseresultat', typ: 'period' },
-  { namn: 'resultat_efter_fin', tag: 'ResultatEfterFinansiellaPoster', typ: 'period' },
-  { namn: 'arets_resultat', tag: 'AretsResultat', typ: 'period' },
-  { namn: 'tillgangar', tag: 'Tillgangar', typ: 'balans' },
-  { namn: 'eget_kapital', tag: 'EgetKapital', typ: 'balans' },
-  { namn: 'soliditet', tag: 'Soliditet', typ: 'balans' },
-  { namn: 'aktiekapital', tag: 'Aktiekapital', typ: 'balans' },
-  { namn: 'kassa_bank', tag: 'KassaBank', typ: 'balans' },
-  { namn: 'kortfristiga_skulder', tag: 'KortfristigaSkulder', typ: 'balans' },
-  { namn: 'anstallda', tag: 'MedelantaletAnstallda', typ: 'period' },
-  { namn: 'personalkostnader', tag: 'Personalkostnader', typ: 'period' },
-  { namn: 'utdelning', tag: 'ForslagDispositionUtdelning', typ: 'balans' },
+  { namn: 'nettoomsattning', tag: 'Nettoomsattning', typ: 'period',
+    ifrs: ['Revenue', 'RevenueFromContractsWithCustomers', ['RevenueFromSaleOfGoods', 'RevenueFromRenderingOfServices']] },
+  { namn: 'rorelseresultat', tag: 'Rorelseresultat', typ: 'period', ifrs: ['ProfitLossFromOperatingActivities'] },
+  { namn: 'resultat_efter_fin', tag: 'ResultatEfterFinansiellaPoster', typ: 'period', ifrs: ['ProfitLossBeforeTax'] },
+  { namn: 'arets_resultat', tag: 'AretsResultat', typ: 'period', ifrs: ['ProfitLoss', 'ProfitLossAttributableToOwnersOfParent'] },
+  { namn: 'tillgangar', tag: 'Tillgangar', typ: 'balans', ifrs: ['Assets'] },
+  { namn: 'eget_kapital', tag: 'EgetKapital', typ: 'balans', ifrs: ['Equity', 'EquityAttributableToOwnersOfParent'] },
+  { namn: 'soliditet', tag: 'Soliditet', typ: 'balans', ifrs: [] },
+  { namn: 'aktiekapital', tag: 'Aktiekapital', typ: 'balans', ifrs: ['IssuedCapital'] },
+  { namn: 'kassa_bank', tag: 'KassaBank', typ: 'balans', ifrs: ['CashAndCashEquivalents'] },
+  { namn: 'kortfristiga_skulder', tag: 'KortfristigaSkulder', typ: 'balans', ifrs: ['CurrentLiabilities'] },
+  { namn: 'anstallda', tag: 'MedelantaletAnstallda', typ: 'period', ifrs: [] },
+  { namn: 'personalkostnader', tag: 'Personalkostnader', typ: 'period', ifrs: ['EmployeeBenefitsExpense'] },
+  { namn: 'utdelning', tag: 'ForslagDispositionUtdelning', typ: 'balans',
+    ifrs: ['DividendsProposedOrDeclaredBeforeFinancialStatementsAuthorisedForIssueButNotRecognisedAsDistributionToOwners'] },
 ];
 
-export const RUBRIK = ['orgnr', 'fran', 'till', 'undertecknad', 'sate', 'valuta', ...KOLUMNER.map((k) => k.namn)];
+// `esef` är tomt för en vanlig årsredovisning. För ett börsbolag vars
+// siffror kommer ur ESEF-rapporten är det "koncern" när rapporten är en
+// koncernredovisning och annars "bolag". Kolumnen står sist, så att äldre
+// läsare som letar kolumnerna via rubriken inte påverkas.
+export const RUBRIK = ['orgnr', 'fran', 'till', 'undertecknad', 'sate', 'valuta', ...KOLUMNER.map((k) => k.namn), 'esef'];
 
 const attr = (s, namn) => {
   const m = s.match(new RegExp('\\s' + namn + '\\s*=\\s*"([^"]*)"', 'i'));
@@ -191,6 +203,80 @@ function texter(html) {
   return ut;
 }
 
+// Talen för räkenskapsåret ur en iXBRL-rapport. `valj(namn)` säger vilken
+// kolumn ett element hör till och dess rang ({ kol, rang } eller null):
+// lägre rang går före. Bara räkenskapsårets egna värden tas, inte
+// jämförelseårets, och inga värden med dimensioner (uppdelningar).
+function nyckeltal(html, fran, till, valj) {
+  const ktx = kontexter(html);
+  const enh = enheter(html);
+  const passar = (id, typ) => {
+    const k = ktx.get(id);
+    if (!k || k.dim || k.slut !== till) return false;
+    if (typ === 'balans') return true;
+    return !!k.start && (!fran || k.start === fran);
+  };
+  // Samma värde kan stå på flera ställen, till exempel i tusental kronor i
+  // flerårsöversikten och i kronor i resultaträkningen. Det med minst
+  // `scale` är det mest exakta och tas. Två olika element med samma rang
+  // (försäljning av varor och av tjänster utan summa) är bara delar, och
+  // då lämnas kolumnen tom.
+  const varden = {};
+  const basta = {};
+  let valuta = '';
+  for (const m of html.matchAll(/<ix:nonFraction\b([^>]*?)(?:\/>|>([\s\S]*?)<\/ix:nonFraction>)/gi)) {
+    const a = m[1];
+    if (m[2] === undefined) continue;
+    const namn = attr(a, 'name') || '';
+    const val = valj(namn);
+    const tag = namn.split(':').pop();
+    if (!val || !passar(attr(a, 'contextRef'), val.kol.typ)) continue;
+    const sc = Number(attr(a, 'scale') || 0);
+    const b = basta[val.kol.namn];
+    if (b && b.rang < val.rang) continue;
+    if (b && b.rang === val.rang && b.tag !== tag) { b.delar = true; continue; }
+    if (b && b.rang === val.rang && b.skala <= sc) continue;
+    const v = tolkaTal(m[2], attr(a, 'format'), sc, attr(a, 'sign'));
+    if (v === null) continue;
+    varden[val.kol.namn] = v;
+    basta[val.kol.namn] = { rang: val.rang, tag, skala: sc, delar: false };
+    const enhet = enh.get(attr(a, 'unitRef'));
+    if (enhet && !valuta) valuta = enhet;
+  }
+  for (const [k, b] of Object.entries(basta)) if (b.delar) delete varden[k];
+  return { varden, valuta };
+}
+
+// Nyckeltalen ur ett börsbolags ESEF-rapport, eller null om den inte har
+// några. Rapporten följer IFRS och saknar organisationsnummer och
+// räkenskapsår i svensk form: de tas ur `grund`, raden ur intyget som
+// lämnas in tillsammans med rapporten. Soliditeten räknas ut ur eget
+// kapital och tillgångar.
+export function lasEsef(html, grund) {
+  if (!grund || !grund.till) return null;
+  // Prefixet för IFRS-taxonomin står i rapporten, oftast "ifrs-full".
+  const prefix = new Set(['ifrs-full']);
+  for (const m of html.matchAll(/xmlns:([\w.-]+)\s*=\s*"[^"]*xbrl\.ifrs\.org\/taxonomy\/[^"]*\/ifrs-full"/gi)) prefix.add(m[1]);
+  const { varden, valuta } = nyckeltal(html, grund.fran, grund.till, (namn) => {
+    const [p, lokal] = namn.split(':');
+    if (!prefix.has(p)) return null;
+    for (const kol of KOLUMNER) {
+      const rang = kol.ifrs.findIndex((t) => (Array.isArray(t) ? t.includes(lokal) : t === lokal));
+      if (rang !== -1) return { kol, rang };
+    }
+    return null;
+  });
+  if (!Object.keys(varden).length) return null;
+  if (varden.eget_kapital !== undefined && varden.tillgangar) varden.soliditet = varden.eget_kapital / varden.tillgangar;
+  // En koncernredovisning delar upp resultatet och det egna kapitalet på
+  // moderbolagets ägare och minoriteten.
+  const koncern = /name="[^"]*:(ProfitLoss|Equity|ComprehensiveIncome)AttributableTo(OwnersOfParent|NoncontrollingInterests)"/.test(html);
+  return radAv({ ...grund, valuta, esef: koncern ? 'koncern' : 'bolag' }, varden);
+}
+
+// Har raden något nyckeltal alls?
+export const harNyckeltal = (rad) => KOLUMNER.some((k) => rad[k.namn] !== '');
+
 // Nyckeltalen ur en årsredovisning, eller null om det inte är någon.
 // `filnamn` ("5561234567_2025-12-31.zip") ger organisationsnumret om
 // texten saknar det.
@@ -204,36 +290,16 @@ export function lasArsredovisning(html, filnamn = '') {
   const undertecknad = [...(txt.get('UndertecknandeDatum') || []), ...(txt.get('UndertecknandeArsredovisningDatum') || [])]
     .map((d) => (d.match(/\d{4}-\d{2}-\d{2}/) || [])[0]).filter(Boolean).sort().pop() || '';
 
-  const ktx = kontexter(html);
-  const enh = enheter(html);
-  const passar = (id, typ) => {
-    const k = ktx.get(id);
-    if (!k || k.dim || k.slut !== till) return false;
-    if (typ === 'balans') return true;
-    return !!k.start && (!fran || k.start === fran);
-  };
-  // Samma värde kan stå på flera ställen, till exempel i tusental kronor i
-  // flerårsöversikten och i kronor i resultaträkningen. Det med minst
-  // `scale` är det mest exakta och tas.
-  const varden = {};
-  const skala = {};
-  let valuta = '';
-  for (const m of html.matchAll(/<ix:nonFraction\b([^>]*?)(?:\/>|>([\s\S]*?)<\/ix:nonFraction>)/gi)) {
-    const a = m[1];
-    if (m[2] === undefined) continue;
-    const tag = (attr(a, 'name') || '').split(':').pop();
-    const kol = KOLUMNER.find((k) => k.tag === tag);
-    if (!kol || !passar(attr(a, 'contextRef'), kol.typ)) continue;
-    const sc = Number(attr(a, 'scale') || 0);
-    if (kol.namn in varden && skala[kol.namn] <= sc) continue;
-    const v = tolkaTal(m[2], attr(a, 'format'), sc, attr(a, 'sign'));
-    if (v === null) continue;
-    varden[kol.namn] = v;
-    skala[kol.namn] = sc;
-    const enhet = enh.get(attr(a, 'unitRef'));
-    if (enhet && !valuta) valuta = enhet;
-  }
-  const rad = { orgnr, fran, till, undertecknad, sate: forst('ForetagetsSate'), valuta: valuta === 'SEK' ? '' : valuta };
+  const { varden, valuta } = nyckeltal(html, fran, till, (namn) => {
+    const kol = KOLUMNER.find((k) => k.tag === namn.split(':').pop());
+    return kol ? { kol, rang: 0 } : null;
+  });
+  return radAv({ orgnr, fran, till, undertecknad, sate: forst('ForetagetsSate'), valuta, esef: '' }, varden);
+}
+
+// Raden i utfilen av grunduppgifterna och de insamlade talen.
+function radAv(grund, varden) {
+  const rad = { ...grund, valuta: grund.valuta === 'SEK' ? '' : grund.valuta };
   for (const k of KOLUMNER) {
     const v = varden[k.namn];
     if (v === undefined) rad[k.namn] = '';
@@ -244,6 +310,31 @@ export function lasArsredovisning(html, filnamn = '') {
     else rad[k.namn] = String(Math.round(v));
   }
   return rad;
+}
+
+// En inlämning: posterna i bolagets zip i veckofilen. Oftast är det
+// årsredovisningen som xhtml. Ett börsbolag lämnar i stället ett intyg som
+// xhtml, med räkenskapsåret men utan belopp, och ESEF-paketet som en zip
+// i zipen med rapporten under reports/. Paketet läses bara när ingen
+// xhtml har nyckeltal. Ger raderna som hittas.
+export function lasInlamning(poster, filnamn = '') {
+  const rader = [];
+  const paket = [];
+  for (const f of poster) {
+    if (/\.x?html?$/i.test(f.namn)) {
+      const rad = lasArsredovisning(f.data().toString('utf8'), filnamn);
+      if (rad) rader.push(rad);
+    } else if (/\.zip$/i.test(f.namn)) paket.push(f);
+  }
+  if (!rader.length || rader.some(harNyckeltal)) return rader;
+  for (const p of paket) {
+    for (const f of zipPoster(p.data())) {
+      if (!/(^|\/)reports\/[^/]+\.x?html?$/i.test(f.namn)) continue;
+      const rad = lasEsef(f.data().toString('utf8'), rader[0]);
+      if (rad) return [rad];
+    }
+  }
+  return rader;
 }
 
 // Nyare går före: senare räkenskapsår, och vid samma år den senast

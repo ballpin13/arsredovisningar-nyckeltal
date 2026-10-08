@@ -4,7 +4,7 @@
 // fall träffar en egen kodväg.
 
 import assert from 'node:assert/strict';
-import { tolkaTal, lasArsredovisning, arNyare, skrivFil, lasFil, zipEnFil, zipPoster, crc32 } from './lib.mjs';
+import { tolkaTal, lasArsredovisning, lasEsef, lasInlamning, arNyare, skrivFil, lasFil, zipEnFil, zipPoster, crc32 } from './lib.mjs';
 
 let antal = 0;
 const test = (namn, fn) => { fn(); antal++; console.log('ok  ' + namn); };
@@ -86,6 +86,80 @@ test('lasArsredovisning: namn på undertecknare tas inte med', () => {
   assert.ok(!JSON.stringify(r).includes('Anna') && !JSON.stringify(r).includes('Svensson'));
 });
 
+// ESEF: börsbolagens rapport med IFRS-taxonomin. Kontexterna har LEI i
+// stället för organisationsnummer, och beloppen står ofta i miljoner.
+const GRUND = { orgnr: '5599990001', fran: '2025-01-01', till: '2025-12-31', undertecknad: '', sate: '', valuta: '', esef: '' };
+const ifrs = (namn, ctx, varde, prefix = 'ifrs-full') => '<ix:nonFraction name="' + prefix + ':' + namn + '" contextRef="' + ctx + '" unitRef="SEK" decimals="-6" scale="6" format="ixt4:num-comma-decimal">' + varde + '</ix:nonFraction>';
+function esef(delar) {
+  return '<html xmlns:ifrs-full="https://xbrl.ifrs.org/taxonomy/2024-03-27/ifrs-full"><body><ix:header><ix:resources>'
+    + ktx('period0', '2025-01-01', '2025-12-31') + ktx('period1', '2024-01-01', '2024-12-31')
+    + ktx('balans0', null, '2025-12-31') + ktx('balans1', null, '2024-12-31')
+    + ktx('dim0', null, '2025-12-31', '<xbrli:scenario><xbrldi:explicitMember dimension="ifrs-full:ComponentsOfEquityAxis">ifrs-full:RetainedEarningsMember</xbrldi:explicitMember></xbrli:scenario>')
+    + '<xbrli:unit id="SEK"><xbrli:measure>iso4217:SEK</xbrli:measure></xbrli:unit>'
+    + '</ix:resources></ix:header>' + delar.join('') + '</body></html>';
+}
+
+test('lasEsef: IFRS-elementen till samma kolumner, årets värden i hela kronor', () => {
+  const r = lasEsef(esef([ifrs('Revenue', 'period1', '10'), ifrs('Revenue', 'period0', '11 828'), ifrs('ProfitLossFromOperatingActivities', 'period0', '<span>8</span>53'),
+    ifrs('CurrentLiabilities', 'balans0', '2 920')]), GRUND);
+  assert.equal(r.nettoomsattning, '11828000000');
+  assert.equal(r.rorelseresultat, '853000000');
+  assert.equal(r.kortfristiga_skulder, '2920000000');
+  assert.equal(r.orgnr, '5599990001');
+});
+test('lasEsef: koncern när resultatet delas på moderbolagets ägare, annars bolag', () => {
+  assert.equal(lasEsef(esef([ifrs('ProfitLoss', 'period0', '5'), ifrs('ProfitLossAttributableToOwnersOfParent', 'period0', '5')]), GRUND).esef, 'koncern');
+  assert.equal(lasEsef(esef([ifrs('ProfitLoss', 'period0', '5')]), GRUND).esef, 'bolag');
+});
+test('lasEsef: totalen går före en del, i båda ordningarna', () => {
+  const r = lasEsef(esef([ifrs('RevenueFromSaleOfGoods', 'period0', '7'), ifrs('Revenue', 'period0', '9')]), GRUND);
+  assert.equal(r.nettoomsattning, '9000000');
+  assert.equal(lasEsef(esef([ifrs('Revenue', 'period0', '9'), ifrs('RevenueFromSaleOfGoods', 'period0', '7')]), GRUND).nettoomsattning, '9000000');
+  assert.equal(lasEsef(esef([ifrs('RevenueFromSaleOfGoods', 'period0', '7')]), GRUND).nettoomsattning, '7000000');
+});
+test('lasEsef: varor och tjänster utan summa ger ingen omsättning', () => {
+  const r = lasEsef(esef([ifrs('RevenueFromSaleOfGoods', 'period0', '7'), ifrs('RevenueFromRenderingOfServices', 'period0', '2'), ifrs('ProfitLoss', 'period0', '1')]), GRUND);
+  assert.equal(r.nettoomsattning, '');
+  assert.equal(r.arets_resultat, '1000000');
+});
+test('lasEsef: eget kapital med dimension tas inte, moderbolagets ägares andel är reserv', () => {
+  const r = lasEsef(esef([ifrs('Equity', 'dim0', '99'), ifrs('EquityAttributableToOwnersOfParent', 'balans0', '1 743'), ifrs('Assets', 'balans0', '9 353')]), GRUND);
+  assert.equal(r.eget_kapital, '1743000000');
+  assert.equal(r.soliditet, '18.6');
+  assert.equal(lasEsef(esef([ifrs('EquityAttributableToOwnersOfParent', 'balans0', '1'), ifrs('Equity', 'balans0', '2')]), GRUND).eget_kapital, '2000000');
+});
+test('lasEsef: prefixet ur rapporten, bolagets egna element tas inte', () => {
+  const html = esef([ifrs('Revenue', 'period0', '3', 'ifrs'), ifrs('Revenue', 'period0', '4', 'abc'), ifrs('Assets', 'balans0', '6', 'abc')])
+    .replace('<html ', '<html xmlns:ifrs="https://xbrl.ifrs.org/taxonomy/2024-03-27/ifrs-full" ');
+  const r = lasEsef(html, GRUND);
+  assert.equal(r.nettoomsattning, '3000000');
+  assert.equal(r.tillgangar, '');
+  assert.equal(lasEsef(esef([ifrs('Revenue', 'period0', '4', 'abc')]), GRUND), null);
+});
+
+// En inlämning som posterna i bolagets zip.
+const post = (namn, innehall) => ({ namn, data: () => Buffer.from(innehall) });
+const intyg = rapport([]);
+const paket = (html) => ({ namn: 'abc.zip', data: () => zipEnFil('Bolag-2025-12-31-sv/reports/Bolag-2025-12-31-sv.xhtml', Buffer.from(html)) });
+
+test('lasInlamning: intyget utan belopp och ESEF-paketet ger ESEF-raden', () => {
+  const [r, ...ovriga] = lasInlamning([post('intyg.xhtml', intyg), paket(esef([ifrs('Revenue', 'period0', '5')]))], '5599990001_2025-12-31.zip');
+  assert.equal(ovriga.length, 0);
+  assert.equal(r.nettoomsattning, '5000000');
+  assert.equal(r.till, '2025-12-31');
+});
+test('lasInlamning: en årsredovisning med belopp går före paketet', () => {
+  const [r] = lasInlamning([post('ar.xhtml', rapport([tal('Nettoomsattning', 'period0', '2 000')])), paket(esef([ifrs('Revenue', 'period0', '5')]))]);
+  assert.equal(r.nettoomsattning, '2000');
+  assert.equal(r.esef, '');
+});
+test('lasInlamning: paket utan rapport under reports/ ger intygets rad', () => {
+  const fel = { namn: 'abc.zip', data: () => zipEnFil('Bolag/annat/r.xhtml', Buffer.from(esef([ifrs('Revenue', 'period0', '5')]))) };
+  const [r] = lasInlamning([post('intyg.xhtml', intyg), fel]);
+  assert.equal(r.nettoomsattning, '');
+  assert.equal(r.till, '2025-12-31');
+});
+
 test('arNyare: senare räkenskapsår, och vid samma år senare underskrift', () => {
   assert.ok(arNyare({ till: '2025-12-31' }, { till: '2024-12-31' }));
   assert.ok(!arNyare({ till: '2024-12-31' }, { till: '2025-12-31' }));
@@ -97,6 +171,14 @@ test('skrivFil och lasFil: samma bolag tillbaka', () => {
   const r = lasArsredovisning(rapport([tal('Nettoomsattning', 'period0', '2 000')]));
   const bolag = lasFil(skrivFil(new Map([[r.orgnr, r]])).toString('utf8'));
   assert.deepEqual(bolag.get('5599990001'), r);
+});
+test('skrivFil: esef står sist, och en äldre fil utan kolumnen läses med den tom', () => {
+  const r = lasEsef(esef([ifrs('Revenue', 'period0', '5')]), GRUND);
+  const fil = skrivFil(new Map([[r.orgnr, r]])).toString('utf8').split('\n');
+  assert.ok(fil[0].endsWith('\tutdelning\tesef'));
+  assert.ok(fil[1].endsWith('\tbolag'));
+  const gammal = lasFil(fil.map((rad) => rad.split('\t').slice(0, -1).join('\t')).join('\n'));
+  assert.equal(gammal.get('5599990001').esef, '');
 });
 
 test('zipEnFil: läses av zipPoster och har rätt CRC', () => {

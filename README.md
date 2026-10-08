@@ -35,8 +35,15 @@ fälten, rubrikrad först.
 | anstallda | Medelantal anställda |
 | personalkostnader | Kronor |
 | utdelning | Föreslagen utdelning, kronor |
+| esef | Tomt, eller `koncern`/`bolag` för ett börsbolag (se nedan) |
 
 Ett tomt fält betyder att värdet inte står märkt i årsredovisningen.
+
+Börsbolag lämnar ett intyg utan belopp och årsredovisningen i EU:s format
+ESEF, enligt IFRS. Då tas siffrorna ur ESEF-rapporten, och `esef` säger
+om de gäller koncernen eller bolaget. Resultatet efter finansiella poster
+är där resultat före skatt, soliditeten räknas ut ur eget kapital och
+tillgångar, och antal anställda saknas.
 Personnamn tas inte med.
 
 Bara aktiebolag som lämnat in årsredovisningen digitalt finns med. Den
@@ -58,4 +65,5 @@ Inga beroenden, Node 22 eller senare.
 node test.mjs
 node bygg.mjs --ut ut                    # från början
 node bygg.mjs --forra forra --ut ut      # bygger vidare på förra filen
+node bygg.mjs --forra forra --ut ut --omlas lista.txt   # läser om veckofilerna i listan
 ```
