@@ -74,6 +74,18 @@ test('lasArsredovisning: med koncernredovisning tas bolagets egna värden, inte 
   assert.equal(r.aktiekapital, '50000');
   assert.equal(lasArsredovisning(rapport([ktx('kon0', '2025-01-01', '2025-12-31', seg('Koncern')), tal('Nettoomsattning', 'kon0', '900')])).nettoomsattning, '');
 });
+test('lasArsredovisning: bolagets segment som ett par taggar, också med gemener', () => {
+  const par = (namn) => '<xbrli:segment> <se-gen-base:' + namn + '></se-gen-base:' + namn + '> </xbrli:segment>';
+  const html = rapport([
+    ktx('jur0', '2025-01-01', '2025-12-31', par('RedovisningInformationJuridiskPersonSegment')),
+    ktx('gen0', null, '2025-12-31', par('redovisninginformationgenerellsegment')),
+    ktx('kon0', '2025-01-01', '2025-12-31', par('RedovisningInformationKoncernSegment')),
+    tal('Nettoomsattning', 'kon0', '900'), tal('Nettoomsattning', 'jur0', '400'), tal('Aktiekapital', 'gen0', '50 000'),
+  ]);
+  const r = lasArsredovisning(html);
+  assert.equal(r.nettoomsattning, '400');
+  assert.equal(r.aktiekapital, '50000');
+});
 test('lasArsredovisning: soliditet som procent', () => {
   const r = lasArsredovisning(rapport([tal('Soliditet', 'balans0', '29,8').replace('scale="0"', 'scale="-2"')]));
   assert.equal(r.soliditet, '29.8');

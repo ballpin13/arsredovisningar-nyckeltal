@@ -172,10 +172,11 @@ export function tolkaTal(text, format, scale, sign) {
 // med ett segment: juridisk person (bolaget självt), koncern eller
 // generellt. Juridisk person och generellt är bolagets egna värden och
 // räknas som utan dimension; koncernens och alla andra uppdelningar tas
-// inte.
+// inte. Segmentet skrivs ibland som ett par taggar i stället för en
+// självstängande, och ibland med bara gemener.
 function harDimension(k) {
   const delar = [...k.matchAll(/<xbrli:(segment|scenario)\b[^>]*>([\s\S]*?)<\/xbrli:\1>/gi)].map((m) => m[2]).join('')
-    .replace(/<[\w-]+:RedovisningInformation(JuridiskPerson|Generell)Segment\s*\/>/g, '');
+    .replace(/<([\w-]+:RedovisningInformation(?:JuridiskPerson|Generell)Segment)\s*(?:\/>|>\s*<\/\1\s*>)/gi, '');
   return /<xbrli:(segment|scenario)\b/i.test(k) && /<[a-z]/i.test(delar);
 }
 

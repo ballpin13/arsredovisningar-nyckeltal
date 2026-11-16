@@ -42,15 +42,27 @@ const omlas = new Set(arg('omlas', null)
   ? readFileSync(arg('omlas'), 'utf8').split('\n').map((r) => r.split('\t')[0].trim()).filter(Boolean) : []);
 
 // Svarar servern inte (503) väntas en halv, en och en och en halv minut.
+// Servern bryter ibland anslutningen mitt i en veckofil ("terminated").
+// Då fortsätter hämtningen med ett range-anrop från den byte där den
+// stannade, och ett avbrott som gav nya byte räknas inte som ett försök.
 async function hamta(url, forsok = 4) {
+  const delar = [];
+  let fatt = 0;
   for (let i = 1; ; i++) {
+    const fore = fatt;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, fatt ? { headers: { Range: 'bytes=' + fatt + '-' } } : undefined);
+      if (fatt && res.status !== 206) throw new Error('servern fortsatte inte (' + res.status + ')');
       if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-      return Buffer.from(await res.arrayBuffer());
+      for await (const bit of res.body) {
+        delar.push(bit);
+        fatt += bit.length;
+      }
+      return Buffer.concat(delar, fatt);
     } catch (e) {
-      if (i >= forsok) throw new Error(url + ': ' + e.message);
-      await new Promise((r) => setTimeout(r, 30000 * i));
+      if (fatt > fore) i = 0;
+      else if (i >= forsok) throw new Error(url + ': ' + e.message);
+      await new Promise((r) => setTimeout(r, fatt > fore ? 5000 : 30000 * i));
     }
   }
 }
